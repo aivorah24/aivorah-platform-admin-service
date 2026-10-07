@@ -1,0 +1,23 @@
+{
+  "name": "aivorah-platform-admin-service",
+  "version": "1.0.0",
+  "description": "Aivorah Platform Admin — signed-in replacement for the monolith's static /admin/panel.html. Overview tab first (platform stats, B2B/B2C split, per-school drill-down); Map to Teacher, Bulk Import and LLM Usage to follow.",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "nodemon index.js",
+    "test": "jest"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.100.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "firebase-admin": "^12.1.0"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0",
+    "nodemon": "^3.1.14",
+    "supertest": "^7.0.0"
+  }
+}
