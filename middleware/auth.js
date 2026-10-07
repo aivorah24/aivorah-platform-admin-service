@@ -9,6 +9,7 @@ function getAllowedAdminEmails() {
   const list = [
     'kannansaimohan2003@gmail.com',
     'preddy6678@gmail.com',
+    'admin@aivorah.ai',
     process.env.ADMIN_EMAIL || '',
     ...(process.env.ADMIN_EMAILS || '').split(','),
   ];
