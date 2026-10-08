@@ -56,6 +56,7 @@ router.get('/', async (_req, res) => {
         completedTopicsCount: Array.isArray(stats.completed_topics) ? stats.completed_topics.length : 0,
         hasParent: !!parentCountByChild[u.id],
         teacherCount: teacherCountByStudent[u.id] ?? 0,
+        lastSeen: stats.updated_at ?? null,
       };
     });
 

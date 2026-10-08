@@ -13,6 +13,7 @@ app.use('/overview', requireAdmin, require('./routes/overview'));
 app.use('/students', requireAdmin, require('./routes/students'));
 app.use('/teachers', requireAdmin, require('./routes/teachers'));
 app.use('/llm-stats', requireAdmin, require('./routes/llmStats'));
+app.use('/charts-data', requireAdmin, require('./routes/charts-data'));
 
 const PORT = process.env.PORT || 3023;
 if (require.main === module) {
