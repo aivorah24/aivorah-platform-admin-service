@@ -39,4 +39,10 @@ function toTitleCase(str) {
   return String(str || '').replace(/\b\w/g, c => c.toUpperCase());
 }
 
-module.exports = { generateSecurePassword, generateStudentEmail, createFirebaseAccount, toTitleCase };
+// Sequential per-school admission number (TSRA-1001 style), from the current student count.
+function generateAdmissionNumber(schoolName, existingCount) {
+  const prefix = String(schoolName || 'SCH').trim().toUpperCase().replace(/[^A-Z]/g, '').slice(0, 4) || 'SCH';
+  return `${prefix}-${1001 + existingCount}`;
+}
+
+module.exports = { generateSecurePassword, generateStudentEmail, createFirebaseAccount, toTitleCase, generateAdmissionNumber };

@@ -1,0 +1,141 @@
+const request = require('supertest');
+
+process.env.ADMIN_EMAILS = 'allowed@aivorah.test';
+
+const mockDb = { users: [], schools: [], notifications: [], analytics_events: [] };
+const mockFb = { disabled: {}, revoked: [], uids: { 'asha@s.test': 'uid-asha', 'ben@s.test': 'uid-ben' } };
+
+function mockQuery(table) {
+  const filters = [];
+  let pending = null;
+  let rangeArgs = null;
+  const rows = () => mockDb[table].filter((r) => filters.every((f) => f(r)));
+  const q = {
+    select: () => q,
+    order: () => q,
+    eq: (k, v) => { filters.push((r) => r[k] === v); return q; },
+    neq: (k, v) => { filters.push((r) => r[k] !== v); return q; },
+    or: (expr) => {
+      const term = /%([^%]+)%/.exec(expr)[1].toLowerCase();
+      filters.push((r) => ['name', 'email', 'school'].some((k) => String(r[k] || '').toLowerCase().includes(term)));
+      return q;
+    },
+    range: (a, b) => { rangeArgs = [a, b]; return q; },
+    insert: (row) => { pending = { op: 'insert', row }; return q; },
+    update: (patch) => { pending = { op: 'update', patch }; return q; },
+    maybeSingle: () => Promise.resolve({ data: rows()[0] || null, error: null }),
+    then: (resolve) => {
+      if (pending?.op === 'insert') { [].concat(pending.row).forEach((r) => mockDb[table].push({ ...r })); return resolve({ data: null, error: null }); }
+      if (pending?.op === 'update') { rows().forEach((r) => Object.assign(r, pending.patch)); return resolve({ data: null, error: null }); }
+      const all = rows();
+      return resolve({ data: rangeArgs ? all.slice(rangeArgs[0], rangeArgs[1] + 1) : all, error: null, count: all.length });
+    },
+  };
+  return q;
+}
+
+jest.mock('../services/supabase', () => ({ from: (t) => mockQuery(t) }));
+jest.mock('../services/mailer', () => ({ sendEmail: jest.fn(async () => ({})) }));
+jest.mock('../services/firebaseAdmin', () => ({
+  auth: () => ({
+    verifyIdToken: jest.fn(async () => ({ email: 'allowed@aivorah.test' })),
+    getUserByEmail: jest.fn(async (email) => {
+      if (!mockFb.uids[email]) { const e = new Error('no user'); e.code = 'auth/user-not-found'; throw e; }
+      return { uid: mockFb.uids[email] };
+    }),
+    updateUser: jest.fn(async (uid, { disabled }) => { mockFb.disabled[uid] = disabled; }),
+    revokeRefreshTokens: jest.fn(async (uid) => { mockFb.revoked.push(uid); }),
+    generatePasswordResetLink: jest.fn(async () => 'https://reset.example/link'),
+  }),
+}));
+
+const app = require('../index');
+const auth = (r) => r.set('Authorization', 'Bearer allowed');
+
+beforeEach(() => {
+  mockDb.users = [
+    { id: 'u1', name: 'Asha Rao', email: 'asha@s.test', role: 'student', school: 'TSRA', school_id: 'sch1', status: 'active', created_at: '2026-10-01' },
+    { id: 'u2', name: 'Ben Kumar', email: 'ben@s.test', role: 'teacher', school: 'TSRA', school_id: 'sch1', status: 'blocked', created_at: '2026-10-02' },
+    { id: 'u3', name: 'Platform Admin', email: 'allowed@aivorah.test', role: 'student', school: null, status: 'active', created_at: '2026-10-03' },
+  ];
+  mockDb.schools = [{ id: 'sch1', name: 'TSRA' }, { id: 'sch2', name: 'Seed Test School (CBSE)' }];
+  mockDb.notifications = []; mockDb.analytics_events = [];
+  mockFb.disabled = {}; mockFb.revoked = [];
+});
+
+describe('GET /admin/users', () => {
+  test('requires sign-in', async () => {
+    expect((await request(app).get('/admin/users')).status).toBe(401);
+  });
+
+  test('filters by search, role and status, and flags platform admins', async () => {
+    const all = await auth(request(app).get('/admin/users'));
+    expect(all.body.total).toBe(3);
+    expect(all.body.users.find((u) => u.id === 'u3').isPlatformAdmin).toBe(true);
+    expect((await auth(request(app).get('/admin/users?q=kumar'))).body.users.map((u) => u.id)).toEqual(['u2']);
+    expect((await auth(request(app).get('/admin/users?role=teacher'))).body.users.map((u) => u.id)).toEqual(['u2']);
+    expect((await auth(request(app).get('/admin/users?status=blocked'))).body.users.map((u) => u.id)).toEqual(['u2']);
+    expect((await auth(request(app).get('/admin/users?status=active'))).body.total).toBe(2);
+  });
+});
+
+describe('PATCH /admin/users/:id', () => {
+  test('updates name, role and school (with school_id), notifies the user and audits the change', async () => {
+    const res = await auth(request(app).patch('/admin/users/u1')).send({ name: 'Asha R', role: 'teacher', school: 'Seed Test School (CBSE)' });
+    expect(res.status).toBe(200);
+    expect(res.body.changed).toEqual(['name', 'role', 'school']);
+    expect(mockDb.users[0]).toMatchObject({ name: 'Asha R', role: 'teacher', school: 'Seed Test School (CBSE)', school_id: 'sch2' });
+    expect(mockDb.notifications).toHaveLength(1);
+    expect(mockDb.notifications[0]).toMatchObject({ recipient_id: 'u1', type: 'account_updated', title: 'Your account details were updated' });
+    expect(mockDb.notifications[0].body).toMatch(/name is now Asha R, role is now Teacher, school is now Seed Test School \(CBSE\)/);
+    expect(mockDb.analytics_events[0]).toMatchObject({ event_type: 'admin_action', user_email: 'allowed@aivorah.test', page: 'user.update' });
+  });
+
+  test('no-op edits change nothing and send no notification; bad input is rejected', async () => {
+    expect((await auth(request(app).patch('/admin/users/u1')).send({ name: 'Asha Rao' })).body.changed).toEqual([]);
+    expect(mockDb.notifications).toHaveLength(0);
+    expect((await auth(request(app).patch('/admin/users/u1')).send({ name: '  ' })).status).toBe(400);
+    expect((await auth(request(app).patch('/admin/users/u1')).send({ role: 'super_admin' })).status).toBe(400);
+    expect((await auth(request(app).patch('/admin/users/u1')).send({ school: 'Nowhere' })).status).toBe(400);
+    expect((await auth(request(app).patch('/admin/users/u3')).send({ role: 'teacher' })).status).toBe(403);
+    expect((await auth(request(app).patch('/admin/users/missing')).send({ name: 'X' })).status).toBe(404);
+  });
+});
+
+describe('block / unblock', () => {
+  test('blocking disables the Firebase account, revokes sessions and sets status; unblocking restores', async () => {
+    const res = await auth(request(app).post('/admin/users/u1/block')).send({ reason: 'Policy violation', signOut: true });
+    expect(res.status).toBe(200);
+    expect(mockDb.users[0].status).toBe('blocked');
+    expect(mockFb.disabled['uid-asha']).toBe(true);
+    expect(mockFb.revoked).toEqual(['uid-asha']);
+    expect(mockDb.analytics_events[0].meta).toMatchObject({ action: 'user.block', reason: 'Policy violation' });
+
+    await auth(request(app).post('/admin/users/u1/unblock'));
+    expect(mockDb.users[0].status).toBe('active');
+    expect(mockFb.disabled['uid-asha']).toBe(false);
+  });
+
+  test("can't block yourself or another platform admin", async () => {
+    const res = await auth(request(app).post('/admin/users/u3/block')).send({});
+    expect(res.status).toBe(403);
+    expect(mockDb.users[2].status).toBe('active');
+  });
+
+  test('bulk block reports per-user results and skips protected accounts', async () => {
+    const res = await auth(request(app).post('/admin/users/bulk-block')).send({ ids: ['u1', 'u3'] });
+    expect(res.body.results).toEqual([{ id: 'u1', ok: true }, expect.objectContaining({ id: 'u3', ok: false, status: 403 })]);
+    expect((await auth(request(app).post('/admin/users/bulk-unblock')).send({ ids: [] })).status).toBe(400);
+  });
+});
+
+describe('POST /admin/users/:id/reset-password', () => {
+  test('refuses when the server has no email provider, sends when it does', async () => {
+    expect((await auth(request(app).post('/admin/users/u1/reset-password'))).status).toBe(503);
+    process.env.RESEND_API_KEY = 'test';
+    const res = await auth(request(app).post('/admin/users/u1/reset-password'));
+    delete process.env.RESEND_API_KEY;
+    expect(res.status).toBe(200);
+    expect(require('../services/mailer').sendEmail).toHaveBeenCalledWith(expect.objectContaining({ to: 'asha@s.test' }));
+  });
+});

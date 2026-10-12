@@ -3,6 +3,7 @@ const { randomUUID } = require('crypto');
 const router = express.Router();
 const supabase = require('../services/supabase');
 const { generateSecurePassword, generateStudentEmail, createFirebaseAccount, toTitleCase } = require('../services/studentAccounts');
+const { importStudents } = require('../services/bulkImport');
 
 // GET /students?grade=&section=&school=&unassigned=true — ported from the
 // monolith's routes/admin.js GET /students, onto the Test DB.
@@ -115,6 +116,23 @@ router.post('/bulk-create', async (req, res) => {
     res.json({ created, errors, total: created.length });
   } catch (err) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /students/bulk-import — Body: { schoolId, fileName?, rows: [{ studentName, studentEmail?, admissionNo?,
+// grade?, section?, curriculum?, parentName?, parentEmail?, parentPhone? }] }
+// → { school, created, students, skipped, errors: [{row, error}], credentials }
+const MAX_IMPORT_ROWS = 500;
+router.post('/bulk-import', async (req, res) => {
+  const { schoolId, rows, fileName } = req.body || {};
+  if (!schoolId) return res.status(400).json({ error: 'schoolId is required' });
+  if (!Array.isArray(rows) || !rows.length) return res.status(400).json({ error: 'rows must be a non-empty array' });
+  if (rows.length > MAX_IMPORT_ROWS) return res.status(400).json({ error: `At most ${MAX_IMPORT_ROWS} rows per import` });
+  try {
+    res.json(await importStudents({ schoolId, rows, fileName, runByEmail: req.adminEmail }));
+  } catch (err) {
+    console.error('[POST /students/bulk-import] error:', err.message);
+    res.status(err.status || 500).json({ error: err.message || 'Failed to import students' });
   }
 });
 
