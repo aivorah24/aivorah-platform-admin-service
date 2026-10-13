@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const supabase = require('../services/supabase');
+const { normalizeCurriculum } = require('../services/curriculum');
 
 // GET /overview — platform-wide stats for the Admin > Overview tab.
 // Ported from the monolith's routes/admin.js (GET /panel's /admin/overview
@@ -45,7 +46,7 @@ router.get('/', async (_req, res) => {
         name: u.name,
         email: u.email,
         grade: u.grade,
-        curriculum: u.curriculum,
+        curriculum: normalizeCurriculum(u.curriculum),
         school: u.school || '',
         location: u.location,
         onboardingComplete: u.onboarding_complete,

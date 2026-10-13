@@ -56,7 +56,8 @@ describe('GET /charts-data', () => {
     const res = await request(app).get('/charts-data').set('Authorization', 'Bearer allowed');
     expect(res.status).toBe(200);
     expect(res.body.roleCounts).toEqual({ student: 2, teacher: 1, parent: 1 });
-    expect(res.body.curriculumMap).toEqual({ CBSE: 1, NCERT: 1 });
+    // Legacy NCERT students are counted as CBSE.
+    expect(res.body.curriculumMap).toEqual({ CBSE: 2 });
     expect(res.body.gradeMap).toEqual({ 'Grade 5': 2 });
     expect(res.body.onboarding.student).toEqual({ done: 1, total: 2 });
     expect(res.body.assignmentStats).toMatchObject({ total: 2, completed: 1, pending: 1 });
