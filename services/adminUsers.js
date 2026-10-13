@@ -199,6 +199,7 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 const esc = (v) => String(v).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const AUTH_SERVICE_URL = process.env.AUTH_SERVICE_URL || 'https://aivorah-auth-service-g27s.onrender.com';
 const APP_URL = process.env.APP_URL || 'https://aivorah.ai';
+const ORIGIN_RE = /^https?:\/\/[a-z0-9.-]+(:\d+)?$/i;
 
 function inviteHtml({ name, roleLabel, link }) {
   return `<div style="font-family:Inter,Arial,sans-serif;max-width:520px;margin:0 auto;padding:24px;color:#0B0B0B">
@@ -237,6 +238,7 @@ async function createUser({ name, email, role, school, curriculum, grade, sectio
     if (!CURRICULA.includes(c)) throw new AdminUserError(400, 'A student needs a valid curriculum');
     if (!GRADE_RE.test(g)) throw new AdminUserError(400, 'A student needs a grade like "Grade 3"');
     row.curriculum = c; row.grade = g; row.section = String(section || '').trim() || null;
+    if (row.section && row.section.length > 20) throw new AdminUserError(400, 'Section is too long');
   }
   // Students and school admins are fully set up here; teachers and parents finish their own onboarding.
   row.onboarding_complete = role === 'student' || role === 'school_admin';
@@ -247,9 +249,15 @@ async function createUser({ name, email, role, school, curriculum, grade, sectio
   try { fbUser = await firebaseAdmin.auth().getUserByEmail(cleanEmail); } catch (err) { if (err.code !== 'auth/user-not-found') throw err; }
   if (fbUser) throw new AdminUserError(409, 'This email is already registered — ask them to sign in or reset their password');
 
-  const created = await firebaseAdmin.auth().createUser({
-    email: cleanEmail, password: randomUUID() + 'Aa1!', displayName: `${cleanName}|${role}`, emailVerified: false,
-  });
+  let created;
+  try {
+    created = await firebaseAdmin.auth().createUser({
+      email: cleanEmail, password: randomUUID() + 'Aa1!', displayName: `${cleanName}|${role}`, emailVerified: false,
+    });
+  } catch (err) {
+    if (err.code === 'auth/email-already-exists') throw new AdminUserError(409, 'This email is already registered — ask them to sign in or reset their password');
+    throw err;
+  }
   const id = randomUUID();
   const { error } = await supabase.from('users').insert({ id, ...row });
   if (error) {
@@ -257,9 +265,19 @@ async function createUser({ name, email, role, school, curriculum, grade, sectio
     throw error;
   }
 
-  const appBase = frontendOrigin || APP_URL;
-  const link = await firebaseAdmin.auth().generatePasswordResetLink(cleanEmail, { url: `${appBase}/` });
-  await sendEmail({ to: cleanEmail, subject: `You've been invited to Aivorah as a ${ROLE_LABEL[role]}`, html: inviteHtml({ name: cleanName, roleLabel: ROLE_LABEL[role], link }) });
+  await audit(adminEmail, 'user.create', { id, email: cleanEmail }, { role, school: row.school || null });
+
+  // Account is kept if the invite fails; the admin can resend via "Send password reset".
+  const appBase = ORIGIN_RE.test(String(frontendOrigin || '')) ? frontendOrigin : APP_URL;
+  let inviteSent = false; let inviteError = null;
+  try {
+    const link = await firebaseAdmin.auth().generatePasswordResetLink(cleanEmail, { url: `${appBase}/` });
+    await sendEmail({ to: cleanEmail, subject: `You've been invited to Aivorah as a ${ROLE_LABEL[role]}`, html: inviteHtml({ name: cleanName, roleLabel: ROLE_LABEL[role], link }) });
+    inviteSent = true;
+  } catch (err) {
+    console.warn('[adminUsers] invite email failed:', err.message);
+    inviteError = 'Account created, but the invite email could not be sent. Use "Send password reset" to retry.';
+  }
 
   let verificationSent = false;
   try {
@@ -273,8 +291,7 @@ async function createUser({ name, email, role, school, curriculum, grade, sectio
     console.warn('[adminUsers] send-verification failed:', err.message);
   }
 
-  await audit(adminEmail, 'user.create', { id, email: cleanEmail }, { role, school: row.school || null });
-  return { user: { id, ...row, status: 'active', isPlatformAdmin: false, last_active_at: null }, inviteSent: true, verificationSent };
+  return { user: { id, ...row, status: 'active', isPlatformAdmin: false, last_active_at: null }, inviteSent, inviteError, verificationSent };
 }
 
 module.exports = { listUsers, createUser, updateUser, setBlocked, sendPasswordReset, AdminUserError, ROLES, PAGE_SIZE };

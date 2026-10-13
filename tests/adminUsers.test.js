@@ -194,6 +194,26 @@ describe('POST /admin/users', () => {
     expect((await post({ name: 'X', email: 'asha@s.test', role: 'teacher' })).status).toBe(409);
   });
 
+  test('keeps the account and reports inviteSent:false when the invite email fails', async () => {
+    require('../services/mailer').sendEmail.mockRejectedValueOnce(new Error('smtp down'));
+    const res = await auth(request(app).post('/admin/users')).send({ name: 'Mail Fail', email: 'mf@real.test', role: 'teacher' });
+    expect(res.status).toBe(201);
+    expect(res.body).toMatchObject({ inviteSent: false, verificationSent: true });
+    expect(res.body.inviteError).toMatch(/could not be sent/);
+    expect(mockDb.users.find((u) => u.email === 'mf@real.test')).toBeTruthy();
+    expect(mockDb.analytics_events[0]).toMatchObject({ page: 'user.create' });
+  });
+
+  test('ignores a malformed frontendOrigin for the invite link', async () => {
+    const fb = require('../services/firebaseAdmin').auth;
+    const spy = jest.fn(async () => 'https://reset.example/link');
+    require('../services/firebaseAdmin').auth = () => ({ ...fb(), generatePasswordResetLink: spy });
+    try {
+      await auth(request(app).post('/admin/users')).send({ name: 'O', email: 'o@real.test', role: 'teacher', frontendOrigin: 'https://evil.test/path?x' });
+      expect(spy).toHaveBeenCalledWith('o@real.test', { url: 'https://aivorah.ai/' });
+    } finally { require('../services/firebaseAdmin').auth = fb; }
+  });
+
   test('refuses when the server cannot send email', async () => {
     delete process.env.RESEND_API_KEY;
     expect((await auth(request(app).post('/admin/users')).send({ name: 'X', email: 'y@real.test', role: 'teacher' })).status).toBe(503);
