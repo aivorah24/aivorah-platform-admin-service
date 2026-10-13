@@ -2,6 +2,7 @@ const express = require('express');
 const { randomUUID } = require('crypto');
 const router = express.Router();
 const supabase = require('../services/supabase');
+const { normalizeCurriculum } = require('../services/curriculum');
 const { generateSecurePassword, generateStudentEmail, createFirebaseAccount, toTitleCase } = require('../services/studentAccounts');
 
 // GET /students?grade=&section=&school=&unassigned=true — ported from the
@@ -80,7 +81,7 @@ router.post('/bulk-create', async (req, res) => {
       if (!name) continue;
       const grade = row.grade || defaultGrade;
       const section = row.section || defaultSection || '';
-      const curriculum = row.curriculum || defaultCurriculum;
+      const curriculum = normalizeCurriculum(row.curriculum || defaultCurriculum);
       const rowSchool = row.school || school || '';
       if (!grade || !curriculum) { errors.push({ name, error: 'missing grade or curriculum' }); continue; }
       try {

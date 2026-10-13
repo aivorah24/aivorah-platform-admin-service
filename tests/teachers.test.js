@@ -6,8 +6,14 @@ jest.mock('../services/firebaseAdmin', () => ({
   auth: () => ({ verifyIdToken: jest.fn(async () => ({ email: 'allowed@aivorah.test' })) }),
 }));
 
-const TEACHERS = [{ id: 't1', name: 'Ms Rao', email: 'rao@s.test', school: 'TSRA', curriculum: 'CBSE' }];
-const PREFS = [{ user_email: 'rao@s.test', data: { teaches: [{ grade: 'Grade 5', subject: 'Maths' }] } }];
+const TEACHERS = [
+  { id: 't1', name: 'Ms Rao', email: 'rao@s.test', school: 'TSRA', curriculum: 'CBSE' },
+  { id: 't2', name: 'Mr Old', email: 'old@s.test', school: 'TSRA', curriculum: 'NCERT' },
+];
+const PREFS = [
+  { user_email: 'rao@s.test', data: { teaches: [{ grade: 'Grade 5', subject: 'Maths' }] } },
+  { user_email: 'old@s.test', data: { teaches: [{ grade: 'Grade 8', curriculum: 'ncert' }] } },
+];
 
 jest.mock('../services/supabase', () => ({
   from: jest.fn((table) => {
@@ -31,6 +37,11 @@ describe('GET /teachers', () => {
   test('returns each teacher with their teaches[] merged from user_preferences', async () => {
     const res = await request(app).get('/teachers').set('Authorization', 'Bearer allowed');
     expect(res.status).toBe(200);
-    expect(res.body).toEqual([{ id: 't1', name: 'Ms Rao', email: 'rao@s.test', school: 'TSRA', curriculum: 'CBSE', teaches: [{ grade: 'Grade 5', subject: 'Maths' }] }]);
+    expect(res.body[0]).toEqual({ id: 't1', name: 'Ms Rao', email: 'rao@s.test', school: 'TSRA', curriculum: 'CBSE', teaches: [{ grade: 'Grade 5', subject: 'Maths' }] });
+  });
+
+  test('legacy NCERT teachers (row + teaches[]) come back as CBSE', async () => {
+    const res = await request(app).get('/teachers').set('Authorization', 'Bearer allowed');
+    expect(res.body[1]).toMatchObject({ curriculum: 'CBSE', teaches: [{ grade: 'Grade 8', curriculum: 'CBSE' }] });
   });
 });

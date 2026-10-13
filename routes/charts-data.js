@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const supabase = require('../services/supabase');
+const { normalizeCurriculum } = require('../services/curriculum');
 
 // GET /charts-data — aggregate breakdowns for the Admin > Overview charts
 // section. Ported from the monolith's routes/admin.js GET /charts-data onto
@@ -29,9 +30,7 @@ router.get('/', async (_req, res) => {
       if (!c) return null;
       const s = String(c).trim().toUpperCase().replace(/[_-]/g, ' ');
       if (s === 'IB PYP') return 'IB PYP';
-      if (s === 'NCERT') return 'NCERT';
-      if (s === 'CBSE') return 'CBSE';
-      return String(c).trim();
+      return normalizeCurriculum(c);
     };
     const curriculumMap = {};
     for (const u of users.filter((u) => u.role === 'student')) {
