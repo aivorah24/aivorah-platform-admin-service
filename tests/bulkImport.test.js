@@ -61,6 +61,21 @@ test('creates students with IB curriculum from grade, links the class teacher, a
   expect(mockDb.import_runs[0]).toMatchObject({ school_id: 'sch1', imported_count: 2, skipped_count: 0, status: 'Completed', run_by_email: 'admin@aivorah.ai' });
 });
 
+test("a row's curriculum is ignored — every student gets the school's (IB by grade, other boards as-is)", async () => {
+  await importStudents({
+    schoolId: 'sch1',
+    rows: [{ studentName: 'Ivy', grade: 'Grade 3', curriculum: 'CBSE' }, { studentName: 'Jay', grade: 'Grade 11', curriculum: 'IB PYP' }],
+  });
+  expect(mockDb.users.find((u) => u.name === 'Ivy').curriculum).toBe('IB PYP');
+  expect(mockDb.users.find((u) => u.name === 'Jay').curriculum).toBe('IB DP');
+
+  mockDb.schools.push({ id: 'sch2', name: 'Seed', curriculum: 'ICSE' }, { id: 'sch3', name: 'Blank', curriculum: null });
+  await importStudents({ schoolId: 'sch2', rows: [{ studentName: 'Kim', grade: 'Grade 4', curriculum: 'IB PYP' }] });
+  await importStudents({ schoolId: 'sch3', rows: [{ studentName: 'Lou', grade: 'Grade 4', curriculum: 'CBSE' }] });
+  expect(mockDb.users.find((u) => u.name === 'Kim').curriculum).toBe('ICSE');
+  expect(mockDb.users.find((u) => u.name === 'Lou').curriculum).toBeNull();
+});
+
 test('per-row problems are reported without aborting the batch, and a failed email does not fail the row', async () => {
   const out = await importStudents({
     schoolId: 'sch1',
@@ -87,5 +102,6 @@ test('resolveCurriculum maps IB grades to PYP/MYP/DP and leaves other boards alo
   expect(['Grade 1', 'Grade 5', 'Grade 6', 'Grade 10', 'Grade 11'].map((g) => resolveCurriculum('IB', g)))
     .toEqual(['IB PYP', 'IB PYP', 'IB MYP', 'IB MYP', 'IB DP']);
   expect(resolveCurriculum('CBSE', 'Grade 9')).toBe('CBSE');
+  expect(resolveCurriculum(' ib ', 'Grade 7')).toBe('IB MYP');
   expect(resolveCurriculum(null, 'Grade 9')).toBeNull();
 });

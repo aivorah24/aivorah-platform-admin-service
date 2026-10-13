@@ -11,9 +11,12 @@ const { generateParentLoginId } = require('./parentAccounts');
 const { buildGradesSectionsView } = require('./academicStructure');
 const { sendCredentialsEmail, sendOwnAccountCredentialsEmail } = require('./mailer');
 
+// A school follows one board; a student's curriculum is always derived from it
+// (IB → PYP/MYP/DP by grade), never taken from the client.
 function resolveCurriculum(baseCurriculum, grade) {
-  if (!baseCurriculum) return null;
-  if (baseCurriculum !== 'IB') return baseCurriculum;
+  const base = String(baseCurriculum || '').trim();
+  if (!base) return null;
+  if (!/^ib$/i.test(base)) return base;
   const num = parseInt(String(grade || '').replace(/\D/g, ''), 10);
   if (!num || num <= 5) return 'IB PYP';
   if (num <= 10) return 'IB MYP';
@@ -75,7 +78,6 @@ async function importStudents({ schoolId, rows, fileName, runByEmail }) {
     const studentName = String(raw.studentName || '').trim();
     const studentEmail = String(raw.studentEmail || '').trim().toLowerCase();
     const admissionNo = String(raw.admissionNo || '').trim();
-    const rowCurriculum = String(raw.curriculum || '').trim();
     const grade = String(raw.grade || '').trim();
     const section = String(raw.section || '').trim();
     const parentName = String(raw.parentName || '').trim();
@@ -107,7 +109,7 @@ async function importStudents({ schoolId, rows, fileName, runByEmail }) {
       const { error: userErr } = await supabase.from('users').insert({
         id: studentId, name, email, role: 'student',
         grade: grade || null, section: section || null, school: schoolName, school_id: schoolId,
-        curriculum: rowCurriculum || resolveCurriculum(school.curriculum, grade),
+        curriculum: resolveCurriculum(school.curriculum, grade),
         admission_number: admissionNo || generateAdmissionNumber(schoolName, studentCount++),
         status: 'active', onboarding_complete: true,
       });

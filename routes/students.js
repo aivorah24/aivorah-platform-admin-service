@@ -3,7 +3,7 @@ const { randomUUID } = require('crypto');
 const router = express.Router();
 const supabase = require('../services/supabase');
 const { generateSecurePassword, generateStudentEmail, createFirebaseAccount, toTitleCase } = require('../services/studentAccounts');
-const { importStudents } = require('../services/bulkImport');
+const { importStudents, resolveCurriculum } = require('../services/bulkImport');
 
 // GET /students?grade=&section=&school=&unassigned=true — ported from the
 // monolith's routes/admin.js GET /students, onto the Test DB.
@@ -64,14 +64,24 @@ router.post('/assign-teacher', async (req, res) => {
   }
 });
 
-// POST /students/bulk-create — Body: { students: [{name}|string], grade, section, school, curriculum, usePerRow }
+// POST /students/bulk-create — Body: { students: [{name}|string], grade, section, schoolId?, school, curriculum, usePerRow }
+// With schoolId, school name and curriculum come from the schools row (curriculum by grade); client values are ignored.
 router.post('/bulk-create', async (req, res) => {
   try {
-    const { students, grade: defaultGrade, section: defaultSection, school, curriculum: defaultCurriculum, usePerRow } = req.body || {};
+    const { students, grade: defaultGrade, section: defaultSection, schoolId, school, curriculum: defaultCurriculum, usePerRow } = req.body || {};
     if (!Array.isArray(students) || students.length === 0) return res.status(400).json({ error: 'students array is required' });
 
     const rows = students.map((s) => (typeof s === 'string' ? { name: s } : s));
-    if (!usePerRow && !defaultGrade && !defaultCurriculum) return res.status(400).json({ error: 'grade and curriculum are required' });
+    let schoolRow = null;
+    if (schoolId) {
+      if (!usePerRow && !defaultGrade) return res.status(400).json({ error: 'grade is required' });
+      const { data, error } = await supabase.from('schools').select('id, name, curriculum').eq('id', schoolId).maybeSingle();
+      if (error) return res.status(500).json({ error: error.message });
+      if (!data) return res.status(404).json({ error: 'School not found' });
+      schoolRow = data;
+    } else if (!usePerRow && !defaultGrade && !defaultCurriculum) {
+      return res.status(400).json({ error: 'grade and curriculum are required' });
+    }
 
     const created = [];
     const errors = [];
@@ -81,9 +91,9 @@ router.post('/bulk-create', async (req, res) => {
       if (!name) continue;
       const grade = row.grade || defaultGrade;
       const section = row.section || defaultSection || '';
-      const curriculum = row.curriculum || defaultCurriculum;
-      const rowSchool = row.school || school || '';
-      if (!grade || !curriculum) { errors.push({ name, error: 'missing grade or curriculum' }); continue; }
+      const curriculum = schoolRow ? resolveCurriculum(schoolRow.curriculum, grade) : (row.curriculum || defaultCurriculum);
+      const rowSchool = schoolRow ? schoolRow.name : (row.school || school || '');
+      if (!grade || (!schoolRow && !curriculum)) { errors.push({ name, error: schoolRow ? 'missing grade' : 'missing grade or curriculum' }); continue; }
       try {
         const email = generateStudentEmail(name, rowSchool);
         const password = generateSecurePassword();
@@ -97,6 +107,7 @@ router.post('/bulk-create', async (req, res) => {
         const { error: userErr } = await supabase.from('users').insert({
           id: userId, name, email, role: 'student',
           grade, curriculum, school: rowSchool, section,
+          ...(schoolRow && { school_id: schoolRow.id }),
           onboarding_complete: true,
         });
         if (userErr) { errors.push({ name, error: userErr.message }); continue; }
@@ -120,7 +131,7 @@ router.post('/bulk-create', async (req, res) => {
 });
 
 // POST /students/bulk-import — Body: { schoolId, fileName?, rows: [{ studentName, studentEmail?, admissionNo?,
-// grade?, section?, curriculum?, parentName?, parentEmail?, parentPhone? }] }
+// grade?, section?, parentName?, parentEmail?, parentPhone? }] } — curriculum always comes from the school
 // → { school, created, students, skipped, errors: [{row, error}], credentials }
 const MAX_IMPORT_ROWS = 500;
 router.post('/bulk-import', async (req, res) => {
