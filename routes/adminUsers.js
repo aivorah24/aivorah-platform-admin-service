@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { listUsers, updateUser, setBlocked, sendPasswordReset } = require('../services/adminUsers');
+const { listUsers, createUser, updateUser, setBlocked, sendPasswordReset } = require('../services/adminUsers');
 
 const MAX_BULK = 200;
 
@@ -16,7 +16,12 @@ router.get('/', async (req, res) => {
   try { res.json(await listUsers(req.query)); } catch (err) { fail(res, err); }
 });
 
-// PATCH /admin/users/:id { name?, role?, school? } — email changes go through the user's Change Email flow.
+// POST /admin/users { name, email, role, school?, curriculum?, grade?, section?, frontendOrigin? } — real-email invite.
+router.post('/', async (req, res) => {
+  try { res.status(201).json(await createUser(req.body || {}, req.adminEmail)); } catch (err) { fail(res, err); }
+});
+
+// PATCH /admin/users/:id { name?, role?, school?, curriculum?, grade?, section? } — email changes go through the user's Change Email flow.
 router.patch('/:id', async (req, res) => {
   try { res.json(await updateUser(req.params.id, req.body || {}, req.adminEmail)); } catch (err) { fail(res, err); }
 });

@@ -46,6 +46,8 @@ jest.mock('../services/firebaseAdmin', () => ({
     updateUser: jest.fn(async (uid, { disabled }) => { mockFb.disabled[uid] = disabled; }),
     revokeRefreshTokens: jest.fn(async (uid) => { mockFb.revoked.push(uid); }),
     generatePasswordResetLink: jest.fn(async () => 'https://reset.example/link'),
+    createUser: jest.fn(async ({ email }) => { mockFb.uids[email] = `uid-${email}`; return { uid: mockFb.uids[email] }; }),
+    deleteUser: jest.fn(async () => {}),
   }),
 }));
 
@@ -86,8 +88,8 @@ describe('PATCH /admin/users/:id', () => {
     expect(res.body.changed).toEqual(['name', 'role', 'school']);
     expect(mockDb.users[0]).toMatchObject({ name: 'Asha R', role: 'teacher', school: 'Seed Test School (CBSE)', school_id: 'sch2' });
     expect(mockDb.notifications).toHaveLength(1);
-    expect(mockDb.notifications[0]).toMatchObject({ recipient_id: 'u1', type: 'account_updated', title: 'Your account details were updated' });
-    expect(mockDb.notifications[0].body).toMatch(/name is now Asha R, role is now Teacher, school is now Seed Test School \(CBSE\)/);
+    expect(mockDb.notifications[0]).toMatchObject({ recipient_id: 'u1', type: 'account_updated', title: 'Your role has been updated to Teacher' });
+    expect(mockDb.notifications[0].body).toMatch(/As per your request.*name: Asha R; role: Teacher; school: Seed Test School \(CBSE\)/);
     expect(mockDb.analytics_events[0]).toMatchObject({ event_type: 'admin_action', user_email: 'allowed@aivorah.test', page: 'user.update' });
   });
 
@@ -99,6 +101,22 @@ describe('PATCH /admin/users/:id', () => {
     expect((await auth(request(app).patch('/admin/users/u1')).send({ school: 'Nowhere' })).status).toBe(400);
     expect((await auth(request(app).patch('/admin/users/u3')).send({ role: 'teacher' })).status).toBe(403);
     expect((await auth(request(app).patch('/admin/users/missing')).send({ name: 'X' })).status).toBe(404);
+  });
+});
+
+describe('PATCH /admin/users/:id — student academics', () => {
+  test('changing to student requires curriculum + grade, then saves them and notifies', async () => {
+    expect((await auth(request(app).patch('/admin/users/u2')).send({ role: 'student' })).status).toBe(400);
+    expect((await auth(request(app).patch('/admin/users/u2')).send({ role: 'student', curriculum: 'IB PYP', grade: '3' })).status).toBe(400);
+    expect((await auth(request(app).patch('/admin/users/u2')).send({ role: 'student', curriculum: 'Nope', grade: 'Grade 3' })).status).toBe(400);
+    const res = await auth(request(app).patch('/admin/users/u2')).send({ role: 'student', curriculum: 'IB PYP', grade: 'Grade 3', section: 'A' });
+    expect(res.status).toBe(200);
+    expect(mockDb.users[1]).toMatchObject({ role: 'student', curriculum: 'IB PYP', grade: 'Grade 3', section: 'A' });
+    expect(mockDb.notifications[0]).toMatchObject({ recipient_id: 'u2', recipient_role: 'student', title: 'Your role has been updated to Student' });
+  });
+
+  test('editing an existing student without academics still works', async () => {
+    expect((await auth(request(app).patch('/admin/users/u1')).send({ name: 'Asha Q' })).status).toBe(200);
   });
 });
 
@@ -137,5 +155,47 @@ describe('POST /admin/users/:id/reset-password', () => {
     delete process.env.RESEND_API_KEY;
     expect(res.status).toBe(200);
     expect(require('../services/mailer').sendEmail).toHaveBeenCalledWith(expect.objectContaining({ to: 'asha@s.test' }));
+  });
+});
+
+describe('POST /admin/users', () => {
+  beforeEach(() => {
+    process.env.RESEND_API_KEY = 'test';
+    global.fetch = jest.fn(async () => ({ ok: true, status: 200 }));
+    require('../services/mailer').sendEmail.mockClear();
+  });
+  afterEach(() => { delete process.env.RESEND_API_KEY; });
+
+  test('creates a student with academics, emails an invite and starts verification', async () => {
+    const res = await auth(request(app).post('/admin/users')).send({
+      name: 'Riya Shah', email: 'Riya@Real.test', role: 'student', school: 'TSRA', curriculum: 'IB PYP', grade: 'Grade 3', section: 'B',
+    });
+    expect(res.status).toBe(201);
+    expect(res.body).toMatchObject({ inviteSent: true, verificationSent: true });
+    expect(mockDb.users.find((u) => u.email === 'riya@real.test')).toMatchObject({
+      role: 'student', school_id: 'sch1', curriculum: 'IB PYP', grade: 'Grade 3', section: 'B', onboarding_complete: true,
+    });
+    expect(require('../services/mailer').sendEmail).toHaveBeenCalledWith(expect.objectContaining({ to: 'riya@real.test' }));
+    expect(global.fetch).toHaveBeenCalledWith(expect.stringMatching(/\/user\/send-verification$/), expect.anything());
+    expect(mockDb.analytics_events[0]).toMatchObject({ page: 'user.create' });
+  });
+
+  test('teachers and parents finish their own onboarding; school admins need a school', async () => {
+    await auth(request(app).post('/admin/users')).send({ name: 'T One', email: 't1@real.test', role: 'teacher' });
+    expect(mockDb.users.find((u) => u.email === 't1@real.test').onboarding_complete).toBe(false);
+    expect((await auth(request(app).post('/admin/users')).send({ name: 'SA', email: 'sa@real.test', role: 'school_admin' })).status).toBe(400);
+  });
+
+  test('rejects bad input and existing emails', async () => {
+    const post = (body) => auth(request(app).post('/admin/users')).send(body);
+    expect((await post({ name: '', email: 'x@real.test', role: 'teacher' })).status).toBe(400);
+    expect((await post({ name: 'X', email: 'not-an-email', role: 'teacher' })).status).toBe(400);
+    expect((await post({ name: 'X', email: 'x@real.test', role: 'student', curriculum: 'IB PYP' })).status).toBe(400);
+    expect((await post({ name: 'X', email: 'asha@s.test', role: 'teacher' })).status).toBe(409);
+  });
+
+  test('refuses when the server cannot send email', async () => {
+    delete process.env.RESEND_API_KEY;
+    expect((await auth(request(app).post('/admin/users')).send({ name: 'X', email: 'y@real.test', role: 'teacher' })).status).toBe(503);
   });
 });
