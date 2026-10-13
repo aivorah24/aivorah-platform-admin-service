@@ -10,6 +10,7 @@ const {
 const { generateParentLoginId } = require('./parentAccounts');
 const { buildGradesSectionsView } = require('./academicStructure');
 const { sendCredentialsEmail, sendOwnAccountCredentialsEmail } = require('./mailer');
+const { ensureSchoolCurriculum } = require('./schoolCurriculum');
 
 // A school follows one board; a student's curriculum is always derived from it
 // (IB → PYP/MYP/DP by grade), never taken from the client.
@@ -60,10 +61,12 @@ async function logImportRun({ schoolId, fileName, runByEmail, importedCount, ski
   }
 }
 
-async function importStudents({ schoolId, rows, fileName, runByEmail }) {
-  const { data: school, error: schoolErr } = await supabase.from('schools').select('id, name, curriculum').eq('id', schoolId).maybeSingle();
+// `curriculum` is only used (and saved to the school) when the school has none yet.
+async function importStudents({ schoolId, rows, fileName, runByEmail, curriculum }) {
+  const { data: found, error: schoolErr } = await supabase.from('schools').select('id, name, curriculum').eq('id', schoolId).maybeSingle();
   if (schoolErr) throw schoolErr;
-  if (!school) { const e = new Error('School not found'); e.status = 404; throw e; }
+  if (!found) { const e = new Error('School not found'); e.status = 404; throw e; }
+  const school = await ensureSchoolCurriculum(found, curriculum, runByEmail);
   const schoolName = school.name;
 
   const { count } = await supabase.from('users')

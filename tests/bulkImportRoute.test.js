@@ -25,8 +25,8 @@ describe('POST /students/bulk-import', () => {
   });
 
   test('passes the batch and the signed-in admin through to the importer', async () => {
-    const res = await post({ schoolId: 's1', fileName: 'x.xlsx', rows: [{ studentName: 'A' }] });
+    const res = await post({ schoolId: 's1', fileName: 'x.xlsx', curriculum: 'IB', rows: [{ studentName: 'A' }] });
     expect(res.status).toBe(200);
-    expect(importStudents).toHaveBeenCalledWith({ schoolId: 's1', fileName: 'x.xlsx', rows: [{ studentName: 'A' }], runByEmail: 'allowed@aivorah.test' });
+    expect(importStudents).toHaveBeenCalledWith({ schoolId: 's1', fileName: 'x.xlsx', curriculum: 'IB', rows: [{ studentName: 'A' }], runByEmail: 'allowed@aivorah.test' });
   });
 });

@@ -1,5 +1,5 @@
 // importStudents against a tiny in-memory stand-in for the Supabase query builder.
-const mockDb = { users: [], schools: [], parent_children: [], import_runs: [], student_stats: [], user_preferences: [], teacher_student: [] };
+const mockDb = { users: [], schools: [], parent_children: [], import_runs: [], student_stats: [], user_preferences: [], teacher_student: [], analytics_events: [] };
 
 function mockQuery(table) {
   const filters = [];
@@ -69,11 +69,39 @@ test("a row's curriculum is ignored — every student gets the school's (IB by g
   expect(mockDb.users.find((u) => u.name === 'Ivy').curriculum).toBe('IB PYP');
   expect(mockDb.users.find((u) => u.name === 'Jay').curriculum).toBe('IB DP');
 
-  mockDb.schools.push({ id: 'sch2', name: 'Seed', curriculum: 'ICSE' }, { id: 'sch3', name: 'Blank', curriculum: null });
+  mockDb.schools.push({ id: 'sch2', name: 'Seed', curriculum: 'ICSE' });
   await importStudents({ schoolId: 'sch2', rows: [{ studentName: 'Kim', grade: 'Grade 4', curriculum: 'IB PYP' }] });
-  await importStudents({ schoolId: 'sch3', rows: [{ studentName: 'Lou', grade: 'Grade 4', curriculum: 'CBSE' }] });
   expect(mockDb.users.find((u) => u.name === 'Kim').curriculum).toBe('ICSE');
-  expect(mockDb.users.find((u) => u.name === 'Lou').curriculum).toBeNull();
+});
+
+describe('school with no curriculum', () => {
+  beforeEach(() => { mockDb.schools.push({ id: 'blank', name: 'Blank', curriculum: null }); });
+
+  test('a chosen curriculum is validated, saved to the school and audited before students are created', async () => {
+    const out = await importStudents({ schoolId: 'blank', curriculum: 'ib', runByEmail: 'admin@aivorah.ai', rows: [{ studentName: 'Mia', grade: 'Grade 8' }] });
+    expect(out.created).toBe(1);
+    expect(mockDb.schools.find((s) => s.id === 'blank').curriculum).toBe('IB');
+    expect(mockDb.users.find((u) => u.name === 'Mia').curriculum).toBe('IB MYP');
+    expect(mockDb.analytics_events).toEqual([expect.objectContaining({
+      event_type: 'admin_action', user_email: 'admin@aivorah.ai', page: 'school.set_curriculum',
+      meta: expect.objectContaining({ targetId: 'blank', from: null, to: 'IB' }),
+    })]);
+  });
+
+  test('a missing or invalid curriculum is a 400 and nothing is written', async () => {
+    await expect(importStudents({ schoolId: 'blank', rows: [{ studentName: 'X' }] })).rejects.toMatchObject({ status: 400 });
+    await expect(importStudents({ schoolId: 'blank', curriculum: 'State Board', rows: [{ studentName: 'X' }] })).rejects.toMatchObject({ status: 400 });
+    expect(mockDb.schools.find((s) => s.id === 'blank').curriculum).toBeNull();
+    expect(mockDb.users.filter((u) => u.role === 'student')).toHaveLength(1);
+    expect(mockDb.analytics_events).toEqual([]);
+  });
+});
+
+test("a client curriculum is ignored when the school already has one", async () => {
+  await importStudents({ schoolId: 'sch1', curriculum: 'CBSE', rows: [{ studentName: 'Ned', grade: 'Grade 2' }] });
+  expect(mockDb.schools.find((s) => s.id === 'sch1').curriculum).toBe('IB');
+  expect(mockDb.users.find((u) => u.name === 'Ned').curriculum).toBe('IB PYP');
+  expect(mockDb.analytics_events).toEqual([]);
 });
 
 test('per-row problems are reported without aborting the batch, and a failed email does not fail the row', async () => {
@@ -88,7 +116,7 @@ test('per-row problems are reported without aborting the batch, and a failed ema
   expect(out.errors).toEqual([{ row: 1, error: 'Student Name is required' }]);
   expect(out.skipped).toEqual([expect.objectContaining({ row: 2, reason: 'Student already exists' })]);
   expect(out.created).toBe(1);
-  expect(mockDb.users.find((u) => u.email === 'p1@aivorah.parent')).toMatchObject({ role: 'parent', name: 'Mona', phone: '99' });
+  expect(mockDb.users.find((u) => u.email === 'p1@aivorah.parent')).toMatchObject({ role: 'parent', name: 'Mona', phone: '99', school: 'TSRA', school_id: 'sch1' });
   expect(mockDb.parent_children).toEqual([{ parent_email: 'p1@aivorah.parent', child_id: mockDb.users.find((u) => u.name === 'Cara').id }]);
   expect(mockDb.import_runs[0].status).toBe('Completed with errors');
 });

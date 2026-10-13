@@ -337,4 +337,4 @@ async function createUser({ name, email, role, school, curriculum, grade, sectio
   return { user: { id, ...row, status: 'active', isPlatformAdmin: false, last_active_at: null }, inviteSent, inviteError, verificationSent };
 }
 
-module.exports = { listUsers, createUser, updateUser, setBlocked, sendPasswordReset, AdminUserError, ROLES, PAGE_SIZE };
+module.exports = { listUsers, createUser, updateUser, setBlocked, sendPasswordReset, audit, AdminUserError, ROLES, PAGE_SIZE };
