@@ -3,7 +3,7 @@ const request = require('supertest');
 process.env.ADMIN_EMAILS = 'allowed@aivorah.test';
 
 const mockDb = { users: [], schools: [], notifications: [], analytics_events: [] };
-const mockFb = { disabled: {}, revoked: [], uids: { 'asha@s.test': 'uid-asha', 'ben@s.test': 'uid-ben' } };
+const mockFb = { disabled: {}, revoked: [], displayNames: {}, failUpdate: false, uids: { 'asha@s.test': 'uid-asha', 'ben@s.test': 'uid-ben' } };
 
 function mockQuery(table) {
   const filters = [];
@@ -43,7 +43,11 @@ jest.mock('../services/firebaseAdmin', () => ({
       if (!mockFb.uids[email]) { const e = new Error('no user'); e.code = 'auth/user-not-found'; throw e; }
       return { uid: mockFb.uids[email] };
     }),
-    updateUser: jest.fn(async (uid, { disabled }) => { mockFb.disabled[uid] = disabled; }),
+    updateUser: jest.fn(async (uid, props) => {
+      if (mockFb.failUpdate && props.displayName) throw new Error('firebase down');
+      if ('disabled' in props) mockFb.disabled[uid] = props.disabled;
+      if (props.displayName) mockFb.displayNames[uid] = props.displayName;
+    }),
     revokeRefreshTokens: jest.fn(async (uid) => { mockFb.revoked.push(uid); }),
     generatePasswordResetLink: jest.fn(async () => 'https://reset.example/link'),
     createUser: jest.fn(async ({ email }) => { mockFb.uids[email] = `uid-${email}`; return { uid: mockFb.uids[email] }; }),
@@ -59,10 +63,11 @@ beforeEach(() => {
     { id: 'u1', name: 'Asha Rao', email: 'asha@s.test', role: 'student', school: 'TSRA', school_id: 'sch1', status: 'active', created_at: '2026-10-01' },
     { id: 'u2', name: 'Ben Kumar', email: 'ben@s.test', role: 'teacher', school: 'TSRA', school_id: 'sch1', status: 'blocked', created_at: '2026-10-02' },
     { id: 'u3', name: 'Platform Admin', email: 'allowed@aivorah.test', role: 'student', school: null, status: 'active', created_at: '2026-10-03' },
+    { id: 'u4', name: 'Priya Parent', email: 'priya@p.test', role: 'parent', school: null, status: 'active', created_at: '2026-10-04' },
   ];
   mockDb.schools = [{ id: 'sch1', name: 'TSRA' }, { id: 'sch2', name: 'Seed Test School (CBSE)' }];
   mockDb.notifications = []; mockDb.analytics_events = [];
-  mockFb.disabled = {}; mockFb.revoked = [];
+  mockFb.disabled = {}; mockFb.revoked = []; mockFb.displayNames = {}; mockFb.failUpdate = false;
 });
 
 describe('GET /admin/users', () => {
@@ -72,12 +77,12 @@ describe('GET /admin/users', () => {
 
   test('filters by search, role and status, and flags platform admins', async () => {
     const all = await auth(request(app).get('/admin/users'));
-    expect(all.body.total).toBe(3);
+    expect(all.body.total).toBe(4);
     expect(all.body.users.find((u) => u.id === 'u3').isPlatformAdmin).toBe(true);
     expect((await auth(request(app).get('/admin/users?q=kumar'))).body.users.map((u) => u.id)).toEqual(['u2']);
     expect((await auth(request(app).get('/admin/users?role=teacher'))).body.users.map((u) => u.id)).toEqual(['u2']);
     expect((await auth(request(app).get('/admin/users?status=blocked'))).body.users.map((u) => u.id)).toEqual(['u2']);
-    expect((await auth(request(app).get('/admin/users?status=active'))).body.total).toBe(2);
+    expect((await auth(request(app).get('/admin/users?status=active'))).body.total).toBe(3);
   });
 });
 
@@ -91,6 +96,44 @@ describe('PATCH /admin/users/:id', () => {
     expect(mockDb.notifications[0]).toMatchObject({ recipient_id: 'u1', type: 'account_updated', title: 'Your role has been updated to Teacher' });
     expect(mockDb.notifications[0].body).toMatch(/As per your request.*name: Asha R; role: Teacher; school: Seed Test School \(CBSE\)/);
     expect(mockDb.analytics_events[0]).toMatchObject({ event_type: 'admin_action', user_email: 'allowed@aivorah.test', page: 'user.update' });
+    expect(mockFb.displayNames['uid-asha']).toBe('Asha R|teacher');
+  });
+
+  test('each single-field change gets its own title; several get a generic one', async () => {
+    const patch = (body) => auth(request(app).patch('/admin/users/u1')).send(body);
+    await patch({ name: 'Asha N' });
+    await patch({ school: 'Seed Test School (CBSE)' });
+    await patch({ section: 'C' });
+    await patch({ grade: 'Grade 4', curriculum: 'CBSE' });
+    expect(mockDb.notifications.map((n) => n.title)).toEqual([
+      'Your name has been updated', 'Your school has been updated', 'Your section has been updated', 'Your account details have been updated',
+    ]);
+    expect(new Set(mockDb.notifications.map((n) => n.event_key)).size).toBe(4);
+    expect(mockFb.displayNames['uid-asha']).toBe('Asha N|student');
+  });
+
+  test('only name/role changes touch the Firebase displayName', async () => {
+    await auth(request(app).patch('/admin/users/u1')).send({ section: 'D' });
+    expect(mockFb.displayNames).toEqual({});
+  });
+
+  test('parents are notified too, without a child_id', async () => {
+    const res = await auth(request(app).patch('/admin/users/u4')).send({ name: 'Priya P' });
+    expect(res.status).toBe(200);
+    expect(mockDb.notifications).toHaveLength(1);
+    expect(mockDb.notifications[0]).toMatchObject({ recipient_id: 'u4', recipient_role: 'parent', type: 'account_updated', title: 'Your name has been updated' });
+    expect(mockDb.notifications[0].child_id).toBeUndefined();
+  });
+
+  test('a Firebase displayName failure does not fail the edit', async () => {
+    mockFb.failUpdate = true;
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    const res = await auth(request(app).patch('/admin/users/u1')).send({ role: 'teacher' });
+    expect(res.status).toBe(200);
+    expect(mockDb.users[0].role).toBe('teacher');
+    expect(mockDb.notifications).toHaveLength(1);
+    expect(warn).toHaveBeenCalledWith('[adminUsers] displayName sync failed:', 'firebase down');
+    warn.mockRestore();
   });
 
   test('no-op edits change nothing and send no notification; bad input is rejected', async () => {
@@ -129,9 +172,18 @@ describe('block / unblock', () => {
     expect(mockFb.revoked).toEqual(['uid-asha']);
     expect(mockDb.analytics_events[0].meta).toMatchObject({ action: 'user.block', reason: 'Policy violation' });
 
+    expect(mockDb.notifications).toHaveLength(0);
+
     await auth(request(app).post('/admin/users/u1/unblock'));
     expect(mockDb.users[0].status).toBe('active');
     expect(mockFb.disabled['uid-asha']).toBe(false);
+    expect(mockDb.notifications).toHaveLength(1);
+    expect(mockDb.notifications[0]).toMatchObject({ recipient_id: 'u1', type: 'account_updated', title: 'Your account access has been restored' });
+  });
+
+  test('unblocking an already-active user sends no notice', async () => {
+    await auth(request(app).post('/admin/users/u1/unblock'));
+    expect(mockDb.notifications).toHaveLength(0);
   });
 
   test("can't block yourself or another platform admin", async () => {

@@ -30,8 +30,8 @@ async function audit(adminEmail, action, target, meta = {}) {
 }
 
 // In-app notification straight into notifications (notify_event only targets students).
+// Parents get it with child_id null (allowed for account_updated by aivorah-db 0013).
 async function notifyUser(user, { title, body, actorEmail, version }) {
-  if (user.role === 'parent') return; // parent notifications must reference a child (notifications_parent_has_child)
   try {
     const { error } = await supabase.from('notifications').insert({
       recipient_id: user.id,
@@ -126,15 +126,32 @@ async function updateUser(id, { name, role, school, curriculum, grade, section }
   const updated = { ...user, ...patch };
   await audit(adminEmail, 'user.update', user, { changes: changes.map(([field, from, to]) => ({ field, from, to })) });
 
+  if (patch.name || patch.role) await syncDisplayName(updated);
+
   const lines = changes.map(([field, , to]) => (to ? `${field}: ${field === 'role' ? ROLE_LABEL[to] : to}` : `${field} removed`));
-  const roleChanged = changes.some(([f]) => f === 'role');
   await notifyUser(updated, {
-    title: roleChanged ? `Your role has been updated to ${ROLE_LABEL[updated.role]}` : 'Your account details have been updated',
+    title: updateTitle(changes.map(([f]) => f), updated.role),
     body: `As per your request, an Aivorah administrator has updated your account (${lines.join('; ')}). Please contact ${SUPPORT_EMAIL} if anything looks incorrect.`,
     actorEmail: adminEmail,
-    version: new Date().toISOString(),
+    version: randomUUID(),
   });
   return { user: updated, changed: changes.map(([f]) => f) };
+}
+
+function updateTitle(fields, role) {
+  if (fields.includes('role')) return `Your role has been updated to ${ROLE_LABEL[role]}`;
+  if (fields.length === 1) return `Your ${fields[0]} has been updated`;
+  return 'Your account details have been updated';
+}
+
+// The app reads "name|role" from the Firebase displayName; best-effort.
+async function syncDisplayName(user) {
+  try {
+    const uid = await firebaseUid(user.email);
+    if (uid) await firebaseAdmin.auth().updateUser(uid, { displayName: `${user.name}|${user.role}` });
+  } catch (err) {
+    console.warn('[adminUsers] displayName sync failed:', err.message);
+  }
 }
 
 async function firebaseUid(email) {
@@ -171,6 +188,14 @@ async function setBlocked(ids, blocked, { reason, signOut = true } = {}, adminEm
         throw err;
       }
       await audit(adminEmail, blocked ? 'user.block' : 'user.unblock', user, blocked ? { reason: reason || null, signOut: !!signOut } : {});
+      if (!blocked && prevStatus === 'blocked') {
+        await notifyUser(user, {
+          title: 'Your account access has been restored',
+          body: `An Aivorah administrator has restored access to your account. Please contact ${SUPPORT_EMAIL} if you have any questions.`,
+          actorEmail: adminEmail,
+          version: randomUUID(),
+        });
+      }
       results.push({ id, ok: true });
     } catch (err) {
       results.push({ id, ok: false, error: err.message, status: err.status || 500 });
