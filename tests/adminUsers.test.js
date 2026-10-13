@@ -2,7 +2,7 @@ const request = require('supertest');
 
 process.env.ADMIN_EMAILS = 'allowed@aivorah.test';
 
-const mockDb = { users: [], schools: [], notifications: [], analytics_events: [] };
+const mockDb = { users: [], schools: [], notifications: [], analytics_events: [], user_preferences: [] };
 const mockFb = { disabled: {}, revoked: [], displayNames: {}, failUpdate: false, uids: { 'asha@s.test': 'uid-asha', 'ben@s.test': 'uid-ben' } };
 
 function mockQuery(table) {
@@ -67,6 +67,7 @@ beforeEach(() => {
   ];
   mockDb.schools = [{ id: 'sch1', name: 'TSRA' }, { id: 'sch2', name: 'Seed Test School (CBSE)' }];
   mockDb.notifications = []; mockDb.analytics_events = [];
+  mockDb.user_preferences = [{ user_email: 'asha@s.test', data: { roles: ['student'], activeRole: 'student', bio: 'hi' } }];
   mockFb.disabled = {}; mockFb.revoked = []; mockFb.displayNames = {}; mockFb.failUpdate = false;
 });
 
@@ -110,6 +111,13 @@ describe('PATCH /admin/users/:id', () => {
     ]);
     expect(new Set(mockDb.notifications.map((n) => n.event_key)).size).toBe(4);
     expect(mockFb.displayNames['uid-asha']).toBe('Asha N|student');
+  });
+
+  test('a role change swaps the role in user_preferences so the app cannot restore the old one', async () => {
+    await auth(request(app).patch('/admin/users/u1')).send({ role: 'teacher' });
+    expect(mockDb.user_preferences[0].data).toEqual({ roles: ['teacher'], activeRole: 'teacher', bio: 'hi' });
+    await auth(request(app).patch('/admin/users/u2')).send({ role: 'parent' }); // no prefs row: no-op
+    expect(mockDb.user_preferences).toHaveLength(1);
   });
 
   test('only name/role changes touch the Firebase displayName', async () => {

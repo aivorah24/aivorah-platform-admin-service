@@ -127,6 +127,7 @@ async function updateUser(id, { name, role, school, curriculum, grade, section }
   await audit(adminEmail, 'user.update', user, { changes: changes.map(([field, from, to]) => ({ field, from, to })) });
 
   if (patch.name || patch.role) await syncDisplayName(updated);
+  if (patch.role) await syncPreferenceRoles(user.email, changes.find(([f]) => f === 'role')[1], patch.role);
 
   const lines = changes.map(([field, , to]) => (to ? `${field}: ${field === 'role' ? ROLE_LABEL[to] : to}` : `${field} removed`));
   await notifyUser(updated, {
@@ -151,6 +152,23 @@ async function syncDisplayName(user) {
     if (uid) await firebaseAdmin.auth().updateUser(uid, { displayName: `${user.name}|${user.role}` });
   } catch (err) {
     console.warn('[adminUsers] displayName sync failed:', err.message);
+  }
+}
+
+// The app reads roles/activeRole from user_preferences.data; swap the old role so it can't come back.
+async function syncPreferenceRoles(email, from, to) {
+  try {
+    const key = String(email || '').toLowerCase().trim();
+    const { data: row, error } = await supabase.from('user_preferences').select('data').eq('user_email', key).maybeSingle();
+    if (error) throw error;
+    if (!row) return;
+    const prev = Array.isArray(row.data?.roles) && row.data.roles.length ? row.data.roles : [from].filter(Boolean);
+    const roles = [...new Set(prev.map((r) => (r === from ? to : r)).concat(to))];
+    const { error: upErr } = await supabase.from('user_preferences')
+      .update({ data: { ...(row.data || {}), roles, activeRole: to }, updated_at: new Date().toISOString() }).eq('user_email', key);
+    if (upErr) throw upErr;
+  } catch (err) {
+    console.warn('[adminUsers] preferences role sync failed:', err.message);
   }
 }
 
