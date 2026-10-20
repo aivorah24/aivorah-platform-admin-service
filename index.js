@@ -12,6 +12,8 @@ app.get('/health', (_req, res) => res.json({ status: 'ok', service: 'aivorah-pla
 app.use('/overview', requireAdmin, require('./routes/overview'));
 app.use('/students', requireAdmin, require('./routes/students'));
 app.use('/teachers', requireAdmin, require('./routes/teachers'));
+app.use('/schools', requireAdmin, require('./routes/schools'));
+app.use('/admin/users', requireAdmin, require('./routes/adminUsers'));
 app.use('/llm-stats', requireAdmin, require('./routes/llmStats'));
 app.use('/charts-data', requireAdmin, require('./routes/charts-data'));
 
