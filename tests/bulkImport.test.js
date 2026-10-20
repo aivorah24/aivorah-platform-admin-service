@@ -133,3 +133,14 @@ test('resolveCurriculum maps IB grades to PYP/MYP/DP and leaves other boards alo
   expect(resolveCurriculum(' ib ', 'Grade 7')).toBe('IB MYP');
   expect(resolveCurriculum(null, 'Grade 9')).toBeNull();
 });
+
+test('a parent email owned by a non-parent fails the row before any account is created', async () => {
+  const out = await importStudents({
+    schoolId: 'sch1',
+    rows: [{ studentName: 'Kiara', studentEmail: 'kiara@s.test', parentName: 'Meera', parentEmail: 'ct@s.test' }],
+  });
+  expect(out.errors).toEqual([{ row: 1, error: 'Parent email ct@s.test already belongs to a non-parent account' }]);
+  expect(out.created).toBe(0);
+  expect(out.credentials).toEqual([]);
+  expect(mockDb.users.find((u) => u.email === 'kiara@s.test')).toBeUndefined();
+});

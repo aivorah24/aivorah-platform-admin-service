@@ -1,6 +1,9 @@
 const request = require('supertest');
 
 process.env.ADMIN_EMAILS = 'allowed@aivorah.test';
+// Blank (not deleted) so dotenv can't refill them from a local .env.
+process.env.RESEND_API_KEY = '';
+process.env.EMAIL_USER = '';
 
 const mockDb = { users: [], schools: [], notifications: [], analytics_events: [], user_preferences: [] };
 const mockFb = { disabled: {}, revoked: [], displayNames: {}, failUpdate: false, uids: { 'asha@s.test': 'uid-asha', 'ben@s.test': 'uid-ben' } };

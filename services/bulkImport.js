@@ -76,6 +76,7 @@ async function importStudents({ schoolId, rows, fileName, runByEmail, curriculum
   const created = []; const skipped = []; const errors = []; const credentials = [];
   const classTeacherIds = await classTeacherMap(schoolId);
 
+  const mails = [];
   for (let i = 0; i < rows.length; i++) {
     const raw = rows[i] || {};
     const studentName = String(raw.studentName || '').trim();
@@ -105,6 +106,14 @@ async function importStudents({ schoolId, rows, fileName, runByEmail, curriculum
       const email = studentEmail || generateStudentEmail(name, schoolName);
       const { data: dup } = await supabase.from('users').select('id').eq('email', email).maybeSingle();
       if (dup) { errors.push({ row: i + 1, error: 'Email already exists' }); continue; }
+      // Check the parent email before creating anything so a clash doesn't leave a half-imported row.
+      if (parentName && parentEmailIn) {
+        const { data: clash } = await supabase.from('users').select('role').eq('email', parentEmailIn).maybeSingle();
+        if (clash && clash.role !== 'parent') {
+          errors.push({ row: i + 1, error: `Parent email ${parentEmailIn} already belongs to a non-parent account` });
+          continue;
+        }
+      }
 
       const password = generateSecurePassword();
       const firebaseUid = await createFirebaseAccount(email, password);
@@ -159,7 +168,7 @@ async function importStudents({ schoolId, rows, fileName, runByEmail, curriculum
             data: { loginId: parentEmail, initialPassword: pPassword, parentName: pName, school: schoolName, firebaseUid: pUid, mustChangePassword: true, accountStatus: 'active' },
           });
           credentials.push({ name: pName, email: parentEmail, password: pPassword, role: 'parent' });
-          if (parentEmailIn) await safeSend(sendOwnAccountCredentialsEmail, { to: parentEmail, name: pName, loginId: parentEmail, password: pPassword, role: 'parent' });
+          if (parentEmailIn) mails.push([sendOwnAccountCredentialsEmail, { to: parentEmail, name: pName, loginId: parentEmail, password: pPassword, role: 'parent' }]);
         }
         const { data: link } = await supabase.from('parent_children').select('child_id').eq('parent_email', parentEmail).eq('child_id', studentId).maybeSingle();
         if (!link) await supabase.from('parent_children').insert({ parent_email: parentEmail, child_id: studentId });
@@ -167,12 +176,15 @@ async function importStudents({ schoolId, rows, fileName, runByEmail, curriculum
       }
 
       const mailTo = studentEmail || linkedParentEmail;
-      if (mailTo) await safeSend(sendCredentialsEmail, { to: mailTo, childName: name, loginId: email, password, childEmail: email });
+      if (mailTo) mails.push([sendCredentialsEmail, { to: mailTo, childName: name, loginId: email, password, childEmail: email }]);
     } catch (rowErr) {
       console.error(`[bulkImport] row ${i + 1} error:`, rowErr.message);
       errors.push({ row: i + 1, error: rowErr.message });
     }
   }
+
+  // Emails go out in parallel after the response instead of blocking each row.
+  Promise.allSettled(mails.map(([fn, args]) => safeSend(fn, args)));
 
   await logImportRun({ schoolId, fileName, runByEmail, importedCount: created.length, skippedCount: skipped.length + errors.length });
   return { school: schoolName, created: created.length, students: created, skipped, errors, credentials };
