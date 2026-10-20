@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const supabase = require('../services/supabase');
+const { normalizeCurriculum, normalizeCurriculumEntries } = require('../services/curriculum');
 
 // GET /teachers — all teachers with their teaches[] from user_preferences,
 // ported from the monolith's routes/admin.js GET /teachers.
@@ -16,7 +17,7 @@ router.get('/', async (_req, res) => {
     const prefMap = {};
     for (const p of prefs || []) prefMap[p.user_email] = p.data;
 
-    res.json((teachers || []).map((t) => ({ ...t, teaches: prefMap[t.email]?.teaches || [] })));
+    res.json((teachers || []).map((t) => ({ ...t, curriculum: normalizeCurriculum(t.curriculum), teaches: normalizeCurriculumEntries(prefMap[t.email]?.teaches || []) })));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

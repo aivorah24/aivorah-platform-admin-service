@@ -2,6 +2,7 @@ const express = require('express');
 const { randomUUID } = require('crypto');
 const router = express.Router();
 const supabase = require('../services/supabase');
+const { normalizeCurriculum } = require('../services/curriculum');
 const { generateSecurePassword, generateStudentEmail, createFirebaseAccount, toTitleCase } = require('../services/studentAccounts');
 const { importStudents, resolveCurriculum } = require('../services/bulkImport');
 const { ensureSchoolCurriculum } = require('../services/schoolCurriculum');
@@ -93,7 +94,7 @@ router.post('/bulk-create', async (req, res) => {
       if (!name) continue;
       const grade = row.grade || defaultGrade;
       const section = row.section || defaultSection || '';
-      const curriculum = schoolRow ? resolveCurriculum(schoolRow.curriculum, grade) : (row.curriculum || defaultCurriculum);
+      const curriculum = normalizeCurriculum(schoolRow ? resolveCurriculum(schoolRow.curriculum, grade) : (row.curriculum || defaultCurriculum));
       const rowSchool = schoolRow ? schoolRow.name : (row.school || school || '');
       if (!grade || (!schoolRow && !curriculum)) { errors.push({ name, error: schoolRow ? 'missing grade' : 'missing grade or curriculum' }); continue; }
       try {
